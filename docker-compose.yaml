@@ -1,0 +1,116 @@
+name:
+  "wikipedia-final-project"
+
+services:
+  spark-master:
+    image: spark:3.5.8-python3
+    container_name: spark-master
+    hostname: spark-master
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    volumes:
+      - ./spark-data:/opt/spark-data
+  spark-worker:
+    image: spark:3.5.8-python3
+    container_name: spark-worker
+    hostname: spark-worker
+    depends_on:
+      - spark-master
+      - cassandra
+      - kafka
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+      - --webui-port
+      - "8081"
+      - --cores
+      - "2"
+      - --memory
+      - 2G
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./spark-data:/opt/spark-data
+
+  cassandra:
+    image: "cassandra:latest"
+    container_name: "cassandra"
+    ports:
+      - 9042:9042
+    environment:
+      - CASSANDRA_RPC_ADDRESS=0.0.0.0
+      - CASSANDRA_LISTEN_ADDRESS=auto
+      - CASSANDRA_BROADCAST_ADDRESS=cassandra
+      - CASSANDRA_CLUSTER_NAME=my_cluster
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - CASSANDRA_DC=my-datacenter-1
+      - HEAP_NEWSIZE=500
+      - MAX_HEAP_SIZE=2G
+    volumes:
+      - cassandra_data:/var/lib/cassandra:rw
+    restart:
+      on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces'"]
+      interval: 10s
+      start_period: 30s
+      timeout: 5s
+      retries: 10
+
+  cassandra-load-keyspace:
+    image: "cassandra:latest"
+    container_name: "cassandra-init-script"
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./cql/init.cql:/init.cql:ro
+    command: cqlsh cassandra -f /init.cql
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+    volumes:
+      - ./shared/init-kafka.sh:/init-kafka.sh
+    post_start:
+      - command: ./init-kafka.sh
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  event_generator:
+    build: ./event_generator
+    depends_on:
+      - kafka
+    environment:
+      - PYTHONUNBUFFERED=1
+volumes:
+  cassandra_data:

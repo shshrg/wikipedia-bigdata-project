@@ -1,6 +1,7 @@
 from pyspark.sql import SparkSession, Window
 import pyspark.sql.functions as F
 from pyspark.sql.types import StructType, StringType, IntegerType, TimestampType, BooleanType
+import pandas as pd
 
 KAFKA_URL = "wiki-kafka:9092"
 
@@ -68,7 +69,7 @@ activity_spike_sink = (
     .option("kafka.bootstrap.servers", KAFKA_URL)
     .option("topic", "breaking-news-alerts")
     .outputMode("update")
-    .option("checkpointLocation", "/opt/spark-data/checkpoints/activity_spike")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a1_0")
     .start()
 )
 
@@ -97,7 +98,7 @@ keyboard_burst_sink = (
     .option("kafka.bootstrap.servers", KAFKA_URL)
     .option("topic", "breaking-news-alerts")
     .outputMode("update")
-    .option("checkpointLocation", "/opt/spark-data/checkpoints/activity_spike")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a1_1")
     .start()
 )
 
@@ -130,14 +131,14 @@ bot_activity_cassandra_sink = (
     .select(
         F.col("window.start").alias("window_start"),
         F.col("window.end").alias("window_end"),
-        F.col("bot_count"),
-        F.col("human_count"),
-        F.col("bot_activity_percentage")
+        "bot_count",
+        "human_count",
+        "bot_activity_percentage"
     )
     .writeStream
     .format("org.apache.spark.sql.cassandra")
     .options(table="bot_activity_metrics", keyspace="wikipedia_analytics")
-    .option("checkpointLocation", "/opt/spark-data/checkpoints/task1")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a2_0")
     .outputMode("append")
     .start()
 )
@@ -152,7 +153,7 @@ bot_activity_kafka_alert = (
     .option("kafka.bootstrap.servers", KAFKA_URL)
     .option("topic", "bot-alerts")
     .outputMode("update")
-    .option("checkpointLocation", "/opt/spark-data/checkpoints/bot_alerts")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a2_1")
     .start()
 )
 
@@ -180,8 +181,77 @@ bot_activity_10mins_kafka_alert = (
     .option("kafka.bootstrap.servers", KAFKA_URL)
     .option("topic", "bot-alerts")
     .outputMode("update")
-    .option("checkpointLocation", "/opt/spark-data/checkpoints/bot_alerts_10mins")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a2_2")
     .start()
 )
 
+# A3. Language Activity Dashboard
+
+current_language_activity = (
+    df
+    .withWatermark("dt", "2 minutes")
+    .groupBy(
+        F.window("dt", "1 minute"),
+        "domain"
+    )
+    .agg(
+        F.count("*").alias("new_page_count"),
+        F.approx_count_distinct(F.col("user_name")).alias("unique_authors"),
+        F.avg(F.length(F.col("page_title"))).alias("average_title_length")
+    )
+    .select(
+        F.col("window.start").alias("current_window_start"),
+        "domain",
+        "new_page_count",
+        "unique_authors",
+        "average_title_length"
+    )
+)
+
+prev_language_activity = (
+    current_language_activity
+    .withColumn(
+        "next_window_start",
+        F.col("current_window_start") + F.expr("INTERVAL 1 MINUTE")
+    )
+    .select(
+        "next_window_start",
+        F.col("domain").alias("prev_domain"),
+        F.col("new_page_count").alias("prev_count")
+    )
+)
+
+language_activity = (
+    current_language_activity
+    .join(
+        prev_language_activity,
+        (F.col("current_window_start") == F.col("next_window_start")) &
+        (F.col("domain") == F.col("prev_domain")),
+        "left"
+    )
+    .withColumn(
+        "trend",
+        F.round(F.col("new_page_count") - F.fillna(F.col("prev_count"), 0), 2)
+    )
+)
+
+
+language_activity_cassandra_sink = (
+    language_activity
+    .select(
+        F.col("current_window_start").alias("window_start"),
+        F.col("domain"),
+        F.col("new_page_count"),
+        F.col("unique_titles"),
+        F.col("average_title_length")
+    )
+    .writeStream
+    .format("org.apache.spark.sql.cassandra")
+    .options(table="language_activity", keyspace="wikipedia_analytics")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a3")
+    .outputMode("append")
+    .start()
+)
+
+# A4. Spam & Vandalism Detector
 

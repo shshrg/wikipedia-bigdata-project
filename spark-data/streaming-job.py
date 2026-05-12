@@ -1,7 +1,6 @@
 from pyspark.sql import SparkSession, Window
 import pyspark.sql.functions as F
 from pyspark.sql.types import StructType, StringType, IntegerType, TimestampType, BooleanType
-import pandas as pd
 
 KAFKA_URL = "wiki-kafka:9092"
 
@@ -12,6 +11,7 @@ spark = (
     .getOrCreate()
 )
 
+spark.conf.set("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", "false")
 
 schema = StructType() \
     .add("page_title", StringType()) \
@@ -22,24 +22,24 @@ schema = StructType() \
     .add("dt", TimestampType())
 
 
-df = (
-    spark.readStream
-    .format("kafka")
-    .option("kafka.bootstrap.servers", KAFKA_URL)
-    .option("subscribe", "new-pages")
-    .load()
-    .selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)")
-    .select(F.from_json(F.col("value"), schema).alias("data"))
+df = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_URL) \
+    .option("subscribe", "new-pages") \
+    .load() \
+    .selectExpr("CAST(value AS STRING)") \
+    .select(F.from_json(F.col("value"), schema).alias("data")) \
     .select("data.*")
-)
 
 # A1. Breaking News Detection
 
 # a. Statistic Spike Detection
 pages_count = (
     df
+    # 1 hour
     .withWatermark("dt", "1 hour")
     .groupBy(
+        # 5 minutes
         F.window("dt", "5 minutes"),
         F.col("domain")
     )
@@ -60,11 +60,13 @@ activity_spike = (
     )
     .withColumn("spike_ratio", F.col("pages_last_5min") / F.col("avg_pages_per_5min"))
     .filter(F.col("spike_ratio") >= 3.0)
-    .withColumn("alert_type", "activity_spike")
+    .withColumn("alert_type", F.lit("activity_spike"))
 )
 
 activity_spike_sink = (
-    activity_spike.writeStream
+    activity_spike
+    .selectExpr("to_json(struct(*)) AS value")
+    .writeStream
     .format("kafka")
     .option("kafka.bootstrap.servers", KAFKA_URL)
     .option("topic", "breaking-news-alerts")
@@ -77,7 +79,7 @@ activity_spike_sink = (
 
 word_frequencies = (
     df
-    .withWatermark("1 minute")
+    .withWatermark("dt", "1 minute")
     .withColumn("tokens", F.split(F.lower(F.col("page_title")), " "))
     .withColumn("word", F.explode(F.col("tokens")))
     .filter(
@@ -85,15 +87,19 @@ word_frequencies = (
         (F.length(F.col("word")) > 2)
     )
     .groupBy(
+        # 10 minutes
         F.window("dt", "10 minutes"),
         F.col("word")
     )
     .agg(F.count("*").alias("occurences"))
-    .filter(F.col("occurences") >= 5)
+    # 5
+    .filter(F.col("occurences") >= 2)
 )
 
 keyboard_burst_sink = (
-    word_frequencies.writeStream
+    word_frequencies
+    .selectExpr("to_json(struct(*)) AS value")
+    .writeStream
     .format("kafka")
     .option("kafka.bootstrap.servers", KAFKA_URL)
     .option("topic", "breaking-news-alerts")
@@ -107,7 +113,7 @@ keyboard_burst_sink = (
 # 1. Write all info about activity into Cassandra
 bot_activity = (
     df
-    .withWatermark("1 minute")
+    .withWatermark("dt", "1 minute")
     .groupBy(
         F.window("dt", "1 minute")
     )
@@ -148,6 +154,7 @@ bot_activity_cassandra_sink = (
 bot_activity_kafka_alert = (
     bot_activity
     .filter(F.col("bot_activity") > 0.8)
+    .selectExpr("to_json(struct(*)) AS value")
     .writeStream
     .format("kafka")
     .option("kafka.bootstrap.servers", KAFKA_URL)
@@ -160,22 +167,25 @@ bot_activity_kafka_alert = (
 # 3. Alert if 1 bot has created more than 50 pages in the last 10 mins
 bot_activity_10mins = (
     df
+    .withWatermark("dt", "1 minute")
     .filter(
         F.col("user_is_bot") == True
     )
-    .withWatermark("1 minute")
     .groupBy(
+        # 10 minutes
         F.window("dt", "10 minutes", "1 minute"),
         F.col("user_name")
     )
     .agg(
         F.count("*").alias("bot_pages")
     )
+    # 50
     .filter(F.col("bot_pages") > 50)
 )
 
 bot_activity_10mins_kafka_alert = (
     bot_activity_10mins
+    .selectExpr("to_json(struct(*)) AS value")
     .writeStream
     .format("kafka")
     .option("kafka.bootstrap.servers", KAFKA_URL)
@@ -187,71 +197,157 @@ bot_activity_10mins_kafka_alert = (
 
 # A3. Language Activity Dashboard
 
-current_language_activity = (
-    df
-    .withWatermark("dt", "2 minutes")
-    .groupBy(
-        F.window("dt", "1 minute"),
-        "domain"
-    )
-    .agg(
-        F.count("*").alias("new_page_count"),
-        F.approx_count_distinct(F.col("user_name")).alias("unique_authors"),
-        F.avg(F.length(F.col("page_title"))).alias("average_title_length")
-    )
-    .select(
-        F.col("window.start").alias("current_window_start"),
-        "domain",
-        "new_page_count",
-        "unique_authors",
-        "average_title_length"
-    )
-)
+# # current_language_activity = (
+# #     df
+# #     .withWatermark("dt", "2 minutes")
+# #     .groupBy(
+# #         F.window("dt", "1 minute"),
+# #         "domain"
+# #     )
+# #     .agg(
+# #         F.count("*").alias("new_page_count"),
+# #         F.approx_count_distinct(F.col("user_name")).alias("unique_authors"),
+# #         F.avg(F.length(F.col("page_title"))).alias("average_title_length")
+# #     )
+# #     .select(
+# #         F.col("window.start").alias("current_window_start"),
+# #         "domain",
+# #         "new_page_count",
+# #         "unique_authors",
+# #         "average_title_length"
+# #     )
+# # )
 
-prev_language_activity = (
-    current_language_activity
-    .withColumn(
-        "next_window_start",
-        F.col("current_window_start") + F.expr("INTERVAL 1 MINUTE")
-    )
-    .select(
-        "next_window_start",
-        F.col("domain").alias("prev_domain"),
-        F.col("new_page_count").alias("prev_count")
-    )
-)
+# # prev_language_activity = (
+# #     current_language_activity
+# #     .withColumn(
+# #         "next_window_start",
+# #         F.col("current_window_start") + F.expr("INTERVAL 1 MINUTE")
+# #     )
+# #     .select(
+# #         "next_window_start",
+# #         F.col("domain").alias("prev_domain"),
+# #         F.col("new_page_count").alias("prev_count")
+# #     )
+# # )
 
-language_activity = (
-    current_language_activity
-    .join(
-        prev_language_activity,
-        (F.col("current_window_start") == F.col("next_window_start")) &
-        (F.col("domain") == F.col("prev_domain")),
-        "left"
-    )
-    .withColumn(
-        "trend",
-        F.round(F.col("new_page_count") - F.fillna(F.col("prev_count"), 0), 2)
-    )
-)
+# # language_activity = (
+# #     current_language_activity
+# #     .join(
+# #         prev_language_activity,
+# #         (F.col("domain") == F.col("prev_domain")) &
+# #         (F.col("current_window_start") == F.col("next_window_start")) &
+# #         (F.col("current_window_start") >= F.col("next_window_start") - F.expr("INTERVAL 2 MINUTES")) &
+# #         (F.col("current_window_start") <= F.col("next_window_start") + F.expr("INTERVAL 2 MINUTES")),
+# #         "left"
+# #     )
+# #     .withColumn(
+# #         "trend",
+# #         F.round(F.col("new_page_count") - (F.col("prev_count")), 2)
+# #     )
+# #     .fillna(0)
+# # )
 
 
-language_activity_cassandra_sink = (
-    language_activity
-    .select(
-        F.col("current_window_start").alias("window_start"),
-        F.col("domain"),
-        F.col("new_page_count"),
-        F.col("unique_titles"),
-        F.col("average_title_length")
-    )
-    .writeStream
-    .format("org.apache.spark.sql.cassandra")
-    .options(table="language_activity", keyspace="wikipedia_analytics")
-    .option("checkpointLocation", "/opt/spark-data/checkpoints/a3")
-    .outputMode("append")
-    .start()
-)
+# language_activity_cassandra_sink = (
+#     language_activity
+#     .select(
+#         F.col("current_window_start").alias("window_start"),
+#         F.col("domain"),
+#         F.col("new_page_count"),
+#         F.col("unique_authors"),
+#         F.col("average_title_length")
+#     )
+#     .writeStream
+#     .format("org.apache.spark.sql.cassandra")
+#     .options(table="language_activity", keyspace="wikipedia_analytics")
+#     .option("checkpointLocation", "/opt/spark-data/checkpoints/a3")
+#     .outputMode("append")
+#     .start()
+# )
 
 # A4. Spam & Vandalism Detector
 
+# 1. Detect users who create > 10 pages in 5 minutes and/or new users who create pages in different languages
+
+suspicious_users = (
+    df
+    .withWatermark("dt", "2 minutes")
+    .groupBy(
+        F.window("dt", "5 minutes", "1 minute"),
+        "user_name",
+        "user_is_bot"
+    )
+    .agg(
+        F.count("*").alias("total_pages_created"),
+        F.approx_count_distinct(F.col("domain")).alias("unique_domains_count"),
+        F.max(F.col("user_edit_count")).alias("user_edit_count")
+    )
+)
+
+url_pattern = r"https?://\S+"
+phone_pattern = r"\+?\d{1,4}?[-.\s]?\(?\d{1,3}?\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}"
+excessive_numbers = r"(\d.*){7,}"
+
+suspicious_titles = (
+    df
+    .withWatermark("dt", "2 minutes")
+
+)
+
+
+# low severity: short/long page titles
+low_severity_kafka_alert = (
+    suspicious_titles
+    .filter(
+        (F.length(F.col("page_title")) <= 3) | (F.length(F.col("page_title"))>= 40)
+    )
+    .withColumn("severity", F.lit("low"))
+    .selectExpr("to_json(struct(*)) AS value")
+    .writeStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", KAFKA_URL)
+    .option("topic", "spam-alerts")
+    .outputMode("update")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a4_0")
+    .start()
+)
+
+# medium severity: suspicious titles
+medium_severity_kafka_alert = (
+    suspicious_titles
+    .filter(
+        F.col("page_title").rlike(url_pattern) | 
+        F.col("page_title").rlike(phone_pattern) | 
+        F.col("page_title").rlike(excessive_numbers)
+    )
+    .withColumn("severity", F.lit("medium"))
+    .selectExpr("to_json(struct(*)) AS value")
+    .writeStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", KAFKA_URL)
+    .option("topic", "spam-alerts")
+    .outputMode("update")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a4_1")
+    .start()
+)
+
+# high severity: suspicious user activity
+high_severity_kafka_alert = (
+    suspicious_users
+    .filter(
+        ((F.col("total_pages_created") > 10) & (F.col("user_is_bot") == False)) |
+        ((F.col("unique_domains_count") > 1) & (F.col("user_edit_count") <= F.col("total_pages_created")))
+    )
+    .withColumn("severity", F.lit("high"))
+    .selectExpr("to_json(struct(*)) AS value")
+    .writeStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", KAFKA_URL)
+    .option("topic", "spam-alerts")
+    .outputMode("update")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a4_2")
+    .start()
+)
+
+spark.streams.awaitAnyTermination()

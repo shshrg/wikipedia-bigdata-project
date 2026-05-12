@@ -6,7 +6,7 @@ URL = 'https://stream.wikimedia.org/v2/stream/page-create'
 HEADERS = {"User-Agent": "BigDataProject/1.1"}
 
 producer = KafkaProducer(
-    bootstrap_servers=['kafka:9092'],
+    bootstrap_servers=['wiki-kafka:9092'],
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
 
@@ -28,4 +28,4 @@ with EventSource(URL, headers=HEADERS) as stream:
                     'domain': data['meta']['domain'],
                     'dt': data['dt']
                 }
-                producer.send('new-pages', data)
+                producer.send('new-pages', msg)

@@ -110,6 +110,10 @@ services:
       start_period: 30s
 
   ingestion_service:
+    container_name: wiki-ingestion-service
+    build: ./ingestion_service
+    depends_on:
+      - kafka
 
 volumes:
   cassandra_data:

@@ -20,5 +20,12 @@ with EventSource(URL, headers=HEADERS) as stream:
             else:
                 if data['meta']['domain'] == 'canary':
                     continue            
-                # print(f"{data['page_title']} created by {data['performer']['user_text']}")
+                msg = {
+                    'page_title': data['page_title'],
+                    'user_name': data['performer']['user_text'],
+                    'user_is_bot': data['performer']['user_is_bot'],
+                    'user_edit_count': data['performer']['user_edit_count'],
+                    'domain': data['meta']['domain'],
+                    'dt': data['dt']
+                }
                 producer.send('new-pages', data)

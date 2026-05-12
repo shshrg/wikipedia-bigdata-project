@@ -4,7 +4,7 @@ name:
 services:
   spark-master:
     image: spark:3.5.8-python3
-    container_name: spark-master
+    container_name: wiki-spark-master
     hostname: spark-master
     command:
       - /opt/spark/bin/spark-class
@@ -20,9 +20,10 @@ services:
       - "8080:8080"
     volumes:
       - ./spark-data:/opt/spark-data
+
   spark-worker:
     image: spark:3.5.8-python3
-    container_name: spark-worker
+    container_name: wiki-spark-worker
     hostname: spark-worker
     depends_on:
       - spark-master
@@ -44,8 +45,8 @@ services:
       - ./spark-data:/opt/spark-data
 
   cassandra:
-    image: "cassandra:latest"
-    container_name: "cassandra"
+    image: cassandra:latest
+    container_name: wiki-cassandra
     ports:
       - 9042:9042
     environment:
@@ -69,17 +70,18 @@ services:
       retries: 10
 
   cassandra-load-keyspace:
-    image: "cassandra:latest"
-    container_name: "cassandra-init-script"
+    image: cassandra:latest
+    container_name: wiki-cassandra-init-script
     depends_on:
       cassandra:
         condition: service_healthy
     volumes:
-      - ./cql/init.cql:/init.cql:ro
+      - ./init-scripts/init-cassandra.cql:/init.cql:ro
     command: cqlsh cassandra -f /init.cql
+
   kafka:
     image: apache/kafka:latest
-    container_name: kafka
+    container_name: wiki-kafka
     ports:
       - "9092:9092"
       - "9093:9093"
@@ -97,7 +99,7 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
     volumes:
-      - ./shared/init-kafka.sh:/init-kafka.sh
+      - ./init-scripts/init-kafka.sh:/init-kafka.sh
     post_start:
       - command: ./init-kafka.sh
     healthcheck:
@@ -106,11 +108,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-  event_generator:
-    build: ./event_generator
-    depends_on:
-      - kafka
-    environment:
-      - PYTHONUNBUFFERED=1
+
+  ingestion_service:
+
 volumes:
   cassandra_data:

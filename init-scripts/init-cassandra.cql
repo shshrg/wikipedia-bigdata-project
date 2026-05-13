@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.hourly_activity (
     bot_human_ratio  DOUBLE,
     top_authors      LIST<FROZEN<top_author>>,
     PRIMARY KEY (hour, domain)
-) WITH CLUSTERING ORDER BY (domain ASC);
+)
 
 CREATE TYPE IF NOT EXISTS wikipedia_analytics.top_author (
     name    TEXT,
@@ -73,5 +73,5 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.pages_by_domain (
     page_title  TEXT,
     user_name   TEXT,
     user_is_bot BOOLEAN,
-    PRIMARY KEY (domain, dt)
-) WITH CLUSTERING ORDER BY (dt DESC)
+    PRIMARY KEY (domain, dt, page_id)
+) WITH CLUSTERING ORDER BY (dt DESC, page_id ASC)

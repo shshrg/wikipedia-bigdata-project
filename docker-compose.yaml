@@ -1,5 +1,4 @@
-name:
-  "wikipedia-final-project"
+name: "wikipedia-final-project"
 
 services:
   spark-master:
@@ -60,8 +59,7 @@ services:
       - MAX_HEAP_SIZE=2G
     volumes:
       - cassandra_data:/var/lib/cassandra:rw
-    restart:
-      on-failure
+    restart: on-failure
     healthcheck:
       test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces'"]
       interval: 10s
@@ -87,9 +85,9 @@ services:
       - "9093:9093"
     environment:
       KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: 'broker,controller'
-      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
-      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
@@ -103,7 +101,11 @@ services:
     post_start:
       - command: ./init-kafka.sh
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -114,6 +116,15 @@ services:
     build: ./ingestion_service
     depends_on:
       - kafka
+
+  rest_api:
+    container_name: wiki-rest-api
+    build: ./rest
+    ports:
+      - "8083:8083"
+    depends_on:
+      cassandra:
+        condition: service_healthy
 
 volumes:
   cassandra_data:

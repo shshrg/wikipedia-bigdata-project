@@ -22,6 +22,7 @@ with EventSource(URL, headers=HEADERS) as stream:
                     continue            
                 msg = {
                     'page_title': data['page_title'],
+                    'page_id': data['meta']['id'],
                     'user_name': data['performer']['user_text'],
                     'user_is_bot': data['performer']['user_is_bot'],
                     'user_edit_count': data['performer']['user_edit_count'],

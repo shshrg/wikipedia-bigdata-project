@@ -15,6 +15,7 @@ spark.conf.set("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", 
 
 schema = StructType() \
     .add("page_title", StringType()) \
+    .add("page_id", StringType()) \
     .add("user_name", StringType()) \
     .add("user_is_bot", BooleanType()) \
     .add("user_edit_count", IntegerType()) \
@@ -42,6 +43,31 @@ all_events_cassandra_sink = (
     .outputMode("append")
     .start()
 )
+
+# Tables used by REST API
+pages_by_id_sink = (
+    df
+    .select("page_id", "page_title", "domain", "user_name", "user_is_bot", "dt")
+    .writeStream
+    .format("org.apache.spark.sql.cassandra")
+    .options(table="pages_by_id", keyspace="wikipedia_analytics")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a0_pages_by_id")
+    .outputMode("append")
+    .start()
+)
+
+
+pages_by_domain_sink = (
+    df
+    .select("domain", "dt", "page_id", "page_title", "user_name", "user_is_bot")
+    .writeStream
+    .format("org.apache.spark.sql.cassandra")
+    .options(table="pages_by_domain", keyspace="wikipedia_analytics")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a0_pages_by_domain")
+    .outputMode("append")
+    .start()
+)
+
 
 
 

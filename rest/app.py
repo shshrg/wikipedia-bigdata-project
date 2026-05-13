@@ -113,5 +113,53 @@ def pages_by_domain(
         raise HTTPException(status_code=404, detail=f"No pages found for domain '{domain}' in the given time range")
     return {"domain": domain, "from": from_ts.isoformat(), "to": to_ts.isoformat(), "count": len(results), "pages": results}
 
+# endpoints for B1 & B2
+@app.get("/api/reports/hourly")
+def hourly_report(
+    domain: str = Query(..., description="e.g. uk.wikipedia.org"),
+    hours: int = Query(default=6, ge=1, le=168),
+):
+    now = current_hour()
+    hour_slots = [now - timedelta(hours=i) for i in range(1, hours + 1)]
+
+    results = []
+    for hour in hour_slots:
+        rows = state["session"].execute(state["STMT_HOURLY_ACTIVITY"], (hour, domain))
+        for row in rows:
+            d = dict(row._asdict())
+            d["top_authors"] = [
+                {"name": a.name, "is_bot": a.is_bot}
+                for a in (d["top_authors"] or [])
+            ]
+            results.append(d)
+
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No hourly data found for domain '{domain}' in the last {hours} hours"
+        )
+
+    return {"domain": domain, "hours_requested": hours, "count": len(results), "data": results}
+
+
+@app.get("/api/analytics/editor-patterns")
+def editor_patterns(
+    min_pages: int = Query(default=5, ge=1),
+):
+    rows = state["session"].execute(state["STMT_EDITOR_PATTERNS"])
+    results = [
+        dict(row._asdict())
+        for row in rows
+        if row.total_pages >= min_pages
+    ]
+
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No editors found with at least {min_pages} pages"
+        )
+
+    return {"min_pages": min_pages, "count": len(results), "editors": results}
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8083)

@@ -42,6 +42,14 @@ async def lifespan(app: FastAPI):
         AND dt <= ?
         LIMIT ?
     """)
+    state["STMT_HOURLY_ACTIVITY"] = session.prepare("""
+        SELECT * FROM wikipedia_analytics.hourly_activity
+        WHERE hour = ? AND domain = ?
+    """)
+    
+    state["STMT_EDITOR_PATTERNS"] = session.prepare("""
+        SELECT * FROM wikipedia_analytics.editor_behavior_patterns
+    """)
 
     yield
 
@@ -128,8 +136,8 @@ def hourly_report(
         for row in rows:
             d = dict(row._asdict())
             d["top_authors"] = [
-                {"name": a.name, "is_bot": a.is_bot}
-                for a in (d["top_authors"] or [])
+                {"name": a.name, "pages": a.pages, "is_bot": a.is_bot} 
+                for a in (d.get("top_authors") or [])
             ]
             results.append(d)
 

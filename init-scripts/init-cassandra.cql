@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.language_activity (
 
 CREATE TABLE IF NOT EXISTS wikipedia_analytics.page_events (
     user_name       TEXT,
+    page_id         TEXT,
     user_is_bot     BOOLEAN,
     dt              TIMESTAMP,
     domain          TEXT,
@@ -55,7 +56,7 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.editor_behavior_patterns (
 );
 
 CREATE TABLE IF NOT EXISTS wikipedia_analytics.pages_by_id (
-    page_id     UUID,
+    page_id     TEXT,
     page_title  TEXT,
     domain      TEXT,
     user_name   TEXT,
@@ -67,7 +68,7 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.pages_by_id (
 CREATE TABLE IF NOT EXISTS wikipedia_analytics.pages_by_domain (
     domain      TEXT,
     dt          TIMESTAMP,
-    page_id     UUID,
+    page_id     TEXT,
     page_title  TEXT,
     user_name   TEXT,
     user_is_bot BOOLEAN,

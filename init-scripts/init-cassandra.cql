@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.hourly_activity (
 
 CREATE TYPE IF NOT EXISTS wikipedia_analytics.top_author (
     name    TEXT,
+    pages   BIGINT,
     is_bot  BOOLEAN
 );
 

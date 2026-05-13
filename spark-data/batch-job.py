@@ -1,5 +1,6 @@
 from pyspark.sql import SparkSession, Window
 import pyspark.sql.functions as F
+import datetime
 
 spark = (
     SparkSession.builder
@@ -16,40 +17,57 @@ df = spark.read \
 
 # B1. Hourly Activity Report
 
-hourly_activity = (
-    df
-    .withColumn(
-        "hour",
-        F.date_trunc("hour", F.col("dt"))
-    )
-    .groupBy(
-        "hour",
-        "domain"
-    )
+now = datetime.datetime.now(datetime.timezone.utc)
+current_hour_start = now.replace(minute=0, second=0, microsecond=0)
+six_hours_ago = current_hour_start - datetime.timedelta(hours=6)
+
+df_recent = df.filter(
+    (F.col("dt") >= six_hours_ago) & 
+    (F.col("dt") < current_hour_start)
+)
+
+df_hourly = df_recent.withColumn("hour", F.date_trunc("hour", F.col("dt")))
+
+hourly_stats = (
+    df_hourly
+    .groupBy("hour", "domain")
     .agg(
         F.count("*").alias("pages_created"),
-        F.approx_count_distinct(F.col("user_name")).alias("unique_authors"),
+        F.approx_count_distinct("user_name").alias("unique_authors"),
         F.round(
-            F.count(F.when(F.col("user_is_bot")==True, True)) /
-            F.count(F.when(F.col("user_is_bot")==False, True)),
+            F.sum(F.when(F.col("user_is_bot") == True, 1).otherwise(0)) / 
+            F.when(F.sum(F.when(F.col("user_is_bot") == False, 1).otherwise(0)) == 0, 1) # Prevent divide by zero
+            .otherwise(F.sum(F.when(F.col("user_is_bot") == False, 1).otherwise(0))),
             2
-        ).alias("bot_human_ratio"),
-        F.slice(
-            F.array_sort(
-                F.collect_list(
-                    F.struct(
-                        F.col("user_name").alias("name"),
-                        F.col("user_is_bot").alias("is_bot")
-                    )
-                ),
-                lambda x, y: F.when(x["name"] < y["name"], -1)
-                              .when(x["name"] > y["name"], 1)
-                              .otherwise(0)
-            ),
-            1, 10
+        ).alias("bot_human_ratio")
+    )
+)
+
+user_counts = (
+    df_hourly
+    .groupBy("hour", "domain", "user_name", "user_is_bot")
+    .agg(F.count("*").alias("pages_by_user"))
+)
+
+window_top_users = Window.partitionBy("hour", "domain").orderBy(F.col("pages_by_user").desc())
+
+top_users_array = (
+    user_counts
+    .withColumn("rank", F.row_number().over(window_top_users))
+    .filter(F.col("rank") <= 10)
+    .groupBy("hour", "domain")
+    .agg(
+        F.collect_list(
+            F.struct(
+                F.col("user_name").alias("name"),
+                F.col("pages_by_user").alias("pages"),
+                F.col("user_is_bot").alias("is_bot")
+            )
         ).alias("top_authors")
     )
 )
+
+hourly_activity = hourly_stats.join(top_users_array, ["hour", "domain"], "left")
 
 hourly_activity.write \
     .format("org.apache.spark.sql.cassandra") \

@@ -31,20 +31,33 @@ df = spark.readStream \
     .select(F.from_json(F.col("value"), schema).alias("data")) \
     .select("data.*")
 
+
+all_events_cassandra_sink = (
+    df
+    .drop("user_edit_count")
+    .writeStream
+    .format("org.apache.spark.sql.cassandra")
+    .options(table="page_events", keyspace="wikipedia_analytics")
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a0")
+    .outputMode("append")
+    .start()
+)
+
+
+
 # A1. Breaking News Detection
 
 # a. Statistic Spike Detection
 pages_count = (
     df
-    # 1 hour
     .withWatermark("dt", "1 hour")
     .groupBy(
-        # 5 minutes
         F.window("dt", "5 minutes"),
         F.col("domain")
     )
     .agg(
-        F.count("*").alias("new_page_count")
+        F.count("*").alias("new_page_count"),
+        F.slice(F.collect_list("page_title"), 1, 2).alias("sample_pages")
     )
 )
 
@@ -56,11 +69,20 @@ activity_spike = (
     )
     .agg(
         F.avg("new_page_count").alias("avg_pages_per_5min"),
-        F.max("new_page_count").alias("pages_last_5min")
+        F.max("new_page_count").alias("pages_last_5min"),
+        F.last("sample_pages").alias("sample_pages")
     )
     .withColumn("spike_ratio", F.col("pages_last_5min") / F.col("avg_pages_per_5min"))
     .filter(F.col("spike_ratio") >= 3.0)
-    .withColumn("alert_type", F.lit("activity_spike"))
+    .select(
+        F.current_timestamp().cast("string").alias("alert_time"),
+        F.lit("activity_spike").alias("alert_type"),
+        "domain",
+        "pages_last_5min",
+        F.round("avg_pages_per_5min", 2).alias("avg_pages_per_5min"),
+        "spike_ratio",
+        "sample_pages"
+    )
 )
 
 activity_spike_sink = (
@@ -79,7 +101,7 @@ activity_spike_sink = (
 
 word_frequencies = (
     df
-    .withWatermark("dt", "1 minute")
+    .withWatermark("dt", "10 minutes")
     .withColumn("tokens", F.split(F.lower(F.col("page_title")), " "))
     .withColumn("word", F.explode(F.col("tokens")))
     .filter(
@@ -87,13 +109,23 @@ word_frequencies = (
         (F.length(F.col("word")) > 2)
     )
     .groupBy(
-        # 10 minutes
         F.window("dt", "10 minutes"),
         F.col("word")
     )
-    .agg(F.count("*").alias("occurences"))
-    # 5
-    .filter(F.col("occurences") >= 2)
+    .agg(
+        F.count("*").alias("occurrences"),
+        F.collect_set("domain").alias("domains"),
+        F.slice(F.collect_list("page_title"), 1, 3).alias("sample_pages")
+    )
+    .filter(F.col("occurrences") >= 5)
+    .select(
+        F.current_timestamp().cast("string").alias("alert_time"),
+        F.lit("keyword_burst").alias("alert_type"),
+        F.col("word").alias("keyword"),
+        "occurrences",
+        "domains",
+        "sample_pages"
+    )
 )
 
 keyboard_burst_sink = (
@@ -167,19 +199,17 @@ bot_activity_kafka_alert = (
 # 3. Alert if 1 bot has created more than 50 pages in the last 10 mins
 bot_activity_10mins = (
     df
-    .withWatermark("dt", "1 minute")
+    .withWatermark("dt", "10 minutes")
     .filter(
         F.col("user_is_bot") == True
     )
     .groupBy(
-        # 10 minutes
         F.window("dt", "10 minutes", "1 minute"),
         F.col("user_name")
     )
     .agg(
         F.count("*").alias("bot_pages")
     )
-    # 50
     .filter(F.col("bot_pages") > 50)
 )
 
@@ -197,74 +227,57 @@ bot_activity_10mins_kafka_alert = (
 
 # A3. Language Activity Dashboard
 
-# # current_language_activity = (
-# #     df
-# #     .withWatermark("dt", "2 minutes")
-# #     .groupBy(
-# #         F.window("dt", "1 minute"),
-# #         "domain"
-# #     )
-# #     .agg(
-# #         F.count("*").alias("new_page_count"),
-# #         F.approx_count_distinct(F.col("user_name")).alias("unique_authors"),
-# #         F.avg(F.length(F.col("page_title"))).alias("average_title_length")
-# #     )
-# #     .select(
-# #         F.col("window.start").alias("current_window_start"),
-# #         "domain",
-# #         "new_page_count",
-# #         "unique_authors",
-# #         "average_title_length"
-# #     )
-# # )
+language_activity = (
+    df
+    .withWatermark("dt", "2 minutes")
+    .groupBy(
+        F.window("dt", "1 minute"),
+        "domain"
+    )
+    .agg(
+        F.count("*").alias("new_page_count"),
+        F.approx_count_distinct(F.col("user_name")).alias("unique_authors"),
+        F.round(F.avg(F.length(F.col("page_title"))), 2).alias("average_title_length")
+    )
+    .select(
+        F.col("window.start").alias("window_start"),
+        "domain",
+        "new_page_count",
+        "unique_authors",
+        "average_title_length"
+    )
+)
 
-# # prev_language_activity = (
-# #     current_language_activity
-# #     .withColumn(
-# #         "next_window_start",
-# #         F.col("current_window_start") + F.expr("INTERVAL 1 MINUTE")
-# #     )
-# #     .select(
-# #         "next_window_start",
-# #         F.col("domain").alias("prev_domain"),
-# #         F.col("new_page_count").alias("prev_count")
-# #     )
-# # )
-
-# # language_activity = (
-# #     current_language_activity
-# #     .join(
-# #         prev_language_activity,
-# #         (F.col("domain") == F.col("prev_domain")) &
-# #         (F.col("current_window_start") == F.col("next_window_start")) &
-# #         (F.col("current_window_start") >= F.col("next_window_start") - F.expr("INTERVAL 2 MINUTES")) &
-# #         (F.col("current_window_start") <= F.col("next_window_start") + F.expr("INTERVAL 2 MINUTES")),
-# #         "left"
-# #     )
-# #     .withColumn(
-# #         "trend",
-# #         F.round(F.col("new_page_count") - (F.col("prev_count")), 2)
-# #     )
-# #     .fillna(0)
-# # )
+def find_trend_and_write(batch_df, batch_id):
+    domain_window = Window.partitionBy("domain").orderBy("window_start")
+    batch_with_trend = (
+        batch_df
+        .withColumn(
+            "prev_count",
+            F.lag("new_page_count", 1).over(domain_window)
+        )
+        .withColumn(
+            "trend",
+            F.round(F.col("new_page_count") - F.col("prev_count"), 2)
+        )
+        .fillna(0, subset=["trend"])
+        .drop("prev_count")
+    )
+    batch_with_trend.write \
+        .format("org.apache.spark.sql.cassandra") \
+        .options(table="language_activity", keyspace="wikipedia_analytics") \
+        .mode("append") \
+        .save()
 
 
-# language_activity_cassandra_sink = (
-#     language_activity
-#     .select(
-#         F.col("current_window_start").alias("window_start"),
-#         F.col("domain"),
-#         F.col("new_page_count"),
-#         F.col("unique_authors"),
-#         F.col("average_title_length")
-#     )
-#     .writeStream
-#     .format("org.apache.spark.sql.cassandra")
-#     .options(table="language_activity", keyspace="wikipedia_analytics")
-#     .option("checkpointLocation", "/opt/spark-data/checkpoints/a3")
-#     .outputMode("append")
-#     .start()
-# )
+language_activity_cassandra_sink = (
+    language_activity
+    .writeStream
+    .foreachBatch(find_trend_and_write)
+    .option("checkpointLocation", "/opt/spark-data/checkpoints/a3")
+    .outputMode("update")
+    .start()
+)
 
 # A4. Spam & Vandalism Detector
 

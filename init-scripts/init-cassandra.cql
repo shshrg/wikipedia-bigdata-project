@@ -16,5 +16,15 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.language_activity (
     new_page_count              BIGINT,
     unique_authors              BIGINT,
     average_title_length        TEXT,
+    trend                       BIGINT,
     PRIMARY KEY (window_start, domain)
 );
+
+CREATE TABLE IF NOT EXISTS wikipedia_analytics.page_events (
+    user_name       TEXT,
+    user_is_bot     BOOLEAN,
+    dt              TIMESTAMP,
+    domain          TEXT,
+    page_title      TEXT,
+    PRIMARY KEY (user_name, dt)
+) WITH CLUSTERING ORDER BY (dt DESC);

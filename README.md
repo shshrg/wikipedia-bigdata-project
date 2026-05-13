@@ -1,7 +1,7 @@
 # Big Data Final Project
 
 ## Authors: Oleksandra Shergina, Viktoriia Lushpak
-
+***(Звіт до роботи з детальним описом в .pdf файлі)***
 ### Інструкції з розгортання
 
 1. Spark Streaming job:

@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.page_events (
     PRIMARY KEY (user_name, dt)
 ) WITH CLUSTERING ORDER BY (dt DESC);
 
+CREATE TYPE IF NOT EXISTS wikipedia_analytics.top_author (
+    name    TEXT,
+    pages   BIGINT,
+    is_bot  BOOLEAN
+);
+
 CREATE TABLE IF NOT EXISTS wikipedia_analytics.hourly_activity (
     hour             TIMESTAMP,
     domain           TEXT,
@@ -38,13 +44,8 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.hourly_activity (
     bot_human_ratio  DOUBLE,
     top_authors      LIST<FROZEN<top_author>>,
     PRIMARY KEY (hour, domain)
-)
-
-CREATE TYPE IF NOT EXISTS wikipedia_analytics.top_author (
-    name    TEXT,
-    pages   BIGINT,
-    is_bot  BOOLEAN
 );
+
 
 CREATE TABLE IF NOT EXISTS wikipedia_analytics.editor_behavior_patterns (
     user_name        TEXT,
@@ -64,7 +65,7 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.pages_by_id (
     user_is_bot BOOLEAN,
     dt          TIMESTAMP,
     PRIMARY KEY (page_id)
-)
+);
 
 CREATE TABLE IF NOT EXISTS wikipedia_analytics.pages_by_domain (
     domain      TEXT,
@@ -74,4 +75,4 @@ CREATE TABLE IF NOT EXISTS wikipedia_analytics.pages_by_domain (
     user_name   TEXT,
     user_is_bot BOOLEAN,
     PRIMARY KEY (domain, dt, page_id)
-) WITH CLUSTERING ORDER BY (dt DESC, page_id ASC)
+) WITH CLUSTERING ORDER BY (dt DESC, page_id ASC);
